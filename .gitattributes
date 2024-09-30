@@ -1,0 +1,8 @@
+# 모든 텍스트 파일에 대해 OS에 맞는 줄 끝 문자 자동 처리
+* text=auto
+
+# Jupyter 노트북 파일의 줄 끝 문제 해결
+*.ipynb text eol=lf
+
+# JSON 파일의 줄 끝 문제 해결
+*.json text eol=lf
