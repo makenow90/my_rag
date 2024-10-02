@@ -41,11 +41,11 @@ def process_message(channel, method, body):
         return
     
     if query.startswith('!백'):
-        book_names =  {"견고한데이터엔지니어링":39, "데이터플랫폼설계구축":27}
+        book_names =  {"견고한데이터엔지니어링", "aws","데이터플랫폼설계구축"}
         query=query.replace('!백','')
         answer=백_inference(query, book_names)
     elif query.startswith('!운동'):
-        book_names =  {"백년운동":21}
+        book_names =  {"백년운동"}
         query=query.replace('!운동','')
         answer=운동_inference(query, book_names)
 
@@ -129,4 +129,4 @@ except KeyboardInterrupt:
     print("Shutdown complete.")
 
 # 메인 스레드: RabbitMQ와의 초기 연결, 사용자 입력 대기 및 종료 절차를 처리합니다.
-# 서브 스레드: 특정 프로그램의 실행 상태를 모니터링하고, 메시지를 소비하며, 연결 문제를 처리합니다.
+# 서브 스레드: 특정 프로그램의 실행 상태를 모니터링하고, 메시지를 소비하며, 연결 문제를 처리합니다.x

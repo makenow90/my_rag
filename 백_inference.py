@@ -24,79 +24,64 @@ load_dotenv()
 # 프로젝트 이름을 입력합니다.
 logging.langsmith("my_rag")
 
-# GraphState 상태를 저장하는 용도로 사용합니다.
-class GraphState(TypedDict):
-    filepath: str  # 문서의 파일 경로. 예: "/path/to/file.pdf"
-    filetype: str  # 파일의 유형. 보통 "pdf"와 같은 파일 형식을 나타냄
-    page_numbers: list[int]  # 문서의 페이지 번호 목록. 예: [1, 2, 3]
-    batch_size: int  # 한 번에 처리할 페이지나 데이터의 배치 크기
-    split_filepaths: list[str]  # 분할된 PDF 파일 경로 목록. 예: ["/path/to/split1.pdf", "/path/to/split2.pdf"]
-    analyzed_files: list[str]  # 분석이 완료된 파일 경로 목록
-    page_elements: dict[int, dict[str, list[dict]]]  # 각 페이지에 포함된 요소들. 페이지 번호를 키로 하고, 그 안에 텍스트, 이미지 등의 요소가 딕셔너리로 저장됨
-    page_metadata: dict[int, dict]  # 각 페이지의 메타데이터. 페이지 번호를 키로 하고 해당 페이지의 다양한 메타데이터가 저장됨
-    page_summary: dict[int, str]  # 각 페이지에 대한 요약 정보. 페이지 번호를 키로 하고 요약된 텍스트가 저장됨
-    images: list[str]  # 문서에 포함된 이미지 파일 경로 목록
-    images_summary: list[str]  # 각 이미지에 대한 요약 정보 목록
-    tables: list[str]  # 문서에 포함된 테이블 정보 목록
-    tables_summary: dict[int, str]  # 각 테이블에 대한 요약 정보. 테이블 인덱스를 키로 하고 요약된 텍스트가 저장됨
-    texts: list[str]  # 문서에 포함된 텍스트 목록
-    texts_summary: list[str]  # 문서의 텍스트에 대한 요약 정보 목록
-
-def load_graph_state_pickle(filepath: str) -> GraphState:
-    """Pickle 파일에서 GraphState를 불러옵니다."""
+# 1. 메타데이터 불러오기
+def load_metadata(filepath: str):
     with open(filepath, 'rb') as f:
-        graph_state = pickle.load(f)
-    return graph_state
+        metadata = pickle.load(f)
+    return metadata
 
 
-def find_last_page_max_id(graph_state):
-    """마지막 페이지의 가장 큰 ID를 찾습니다."""
-    last_page = max(graph_state["page_numbers"])
-    elements = graph_state["page_elements"].get(last_page, {})
-    max_id = -1
-    for _, items in elements.items():
-        for item in items:
-            if "id" in item and item["id"] > max_id:
-                max_id = item["id"]
-    return max_id
+def find_metadata_index(doc_id, metadata):
+    for index, doc_metadata in enumerate(metadata):
+        if doc_metadata.get("source") == doc_id:
+            return index
+    return None
 
-def create_document(id, loaded_state):
-    """문서를 생성하는 함수."""
+# 2. 문서 생성 함수 (메타데이터 기반)
+def create_document(doc_metadata):
     content = ""
-    if id in loaded_state["table_markdown"]:
-        content += loaded_state["table_markdown"][id] + "\n"
-    if id in loaded_state["table_summary"]:
-        content += loaded_state["table_summary"][id] + "\n"
-    if id in loaded_state["texts"]:
-        content += loaded_state["texts"][id] + "\n"
-    if id in loaded_state["text_summary"]:
-        content += loaded_state["text_summary"][id] + "\n"
-    return Document(page_content=content)
-
-def process_document_for_book(query, book_name, query_embedding, embedding_model,first_id):
-    """특정 교재의 인덱스와 피클 파일을 로드하고 문서를 검색."""
+    # 메타데이터의 'type'에 따라 문서 내용을 다르게 구성
+    if doc_metadata["type"] == "table":
+        content += doc_metadata["content"] + "\n"
+    if doc_metadata["type"] == "texts":
+        content += doc_metadata["content"] + "\n"
     
+    # 추가적으로 다른 유형을 처리할 수 있음 (예: 'image_summary')
+    return Document(page_content=content, metadata=doc_metadata)
+
+# 테이블과 텍스트를 분리하는 함수
+def extract_table_docs(documents):
+    table_docs = []
+    texts_docs=[]
+    for doc in documents:
+        if doc.metadata.get("type") == "table":  # 메타데이터에서 'type'이 'table'인 경우
+            table_docs.append(doc)
+        elif doc.metadata.get("type") == "texts":  # 메타데이터에서 'type'이 'table'인 경우
+            texts_docs.append(doc)
+    return table_docs,texts_docs
+
+def process_document_for_book(query, book_name, query_embedding, embedding_model):
+    """특정 교재의 인덱스와 피클 파일을 로드하고 문서를 검색."""
     # 현재 경로에서 교재의 피클 파일 및 인덱스 파일 경로 설정
     base_name = base64.urlsafe_b64encode(book_name.encode('utf-8')).decode('utf-8')
-    path_pickle = os.path.join(os.getcwd(), 'data', 'pickle', f"{base_name}.pkl")
+    # path_pickle = os.path.join(os.getcwd(), 'data', 'pickle', f"{base_name}.pkl")
     path_index = os.path.join(os.getcwd(), 'data', 'index', f"{base_name}.index")
-    # 피클 파일과 FAISS 인덱스 파일 로드
-    if not os.path.exists(path_pickle):
-        raise FileNotFoundError(f"FAISS 피클 파일을 찾을 수 없습니다: {path_pickle}")
-    loaded_state = load_graph_state_pickle(path_pickle)
+
     if not os.path.exists(path_index):
         raise FileNotFoundError(f"FAISS 인덱스 파일을 찾을 수 없습니다: {path_index}")
     faiss_index = faiss.read_index(path_index)
-    
-    # 마지막 페이지에서 가장 높은 ID 찾기
-    last_id = find_last_page_max_id(loaded_state)
-    print(last_id)
-    # first_id=39
+
+    # 메타데이터 파일 경로 설정
+    metadata_filepath = f"data\\metadata\\{base_name}.pkl"
+    metadata = load_metadata(metadata_filepath)
+
+    # 3. 문서 리스트 작성
+    documents = [create_document(doc_metadata) for doc_metadata in metadata]
+    print(f"총 문서 수: {len(documents)}")
+
     # 문서 리스트 작성
-    documents = [create_document(id, loaded_state) for id in range(first_id, last_id)]
-    
     # InMemoryDocstore 생성
-    docstore = InMemoryDocstore(dict(enumerate(documents, start=first_id)))
+    docstore = InMemoryDocstore(dict(enumerate(documents)))
 
     # FAISS 인덱스에서 검색 수행
     # query_embedding = embedding_model.embed_documents([query])[0]
@@ -105,25 +90,44 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     # 검색된 IDs를 1차원 배열로 변환
     ids = I.flatten()
     
+    
     # index_to_docstore_id 매핑
-    index_to_docstore_id = {int(ids[i]): int(ids[i]) for i in range(len(ids)) if ids[i] != -1}
-    # print(index_to_docstore_id)
+    index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), metadata) for i in range(len(ids)) if ids[i] != -1}
+    print(index_to_docstore_id)
     # VectorStore 생성
     vectorstore = FAISS(embedding_function=embedding_model, index=faiss_index, docstore=docstore, index_to_docstore_id=index_to_docstore_id)
     
     # 검색기 설정
     retriever = vectorstore.as_retriever(
         search_type="similarity_score_threshold",
-        search_kwargs={'k': 100, "score_threshold": 0.25}
+        search_kwargs={'k': 20, "score_threshold": 0.35}
     )
 
     # 질문과 관련된 문서 추출
     retrieved_docs = retriever.get_relevant_documents(query)
+    
     for i, doc in zip(ids, retrieved_docs):
-        print(f"문서 ID: {i}, 내용 요약: {doc.page_content[:10]}")  # 처음 100자만 출력
+        print(f"문서 ID: {i}, 내용 요약: {doc.page_content[:30]}")  # 처음 100자만 출력
+
     print(f"검색된 문서 개수: {len(retrieved_docs)}")
     print(len(retrieved_docs))
-    return retrieved_docs
+
+    
+    # 12. 중복 문서 제거
+    seen_contents = set()
+    filtered_docs = []
+    for doc in retrieved_docs:
+        content_hash = hash(doc.page_content)
+        if content_hash not in seen_contents:
+            filtered_docs.append(doc)
+            seen_contents.add(content_hash)
+
+    # 테이블 문서 추출
+    table_docs, retrieved_docs = extract_table_docs(retrieved_docs)
+    print(f"테이블 제거 문서 개수: {len(retrieved_docs)}")
+
+    return retrieved_docs,table_docs
+
 
 # 메인 코드: 여러 교재를 처리
 def 백_inference(query, book_names):
@@ -134,26 +138,14 @@ def 백_inference(query, book_names):
     )
     
     query_embedding = embedding_model.embed_documents([query])[0]
-    
-    filtered_docs = []
-    seen_contents = set()
 
     # 여러 교재를 순회하며 처리
-    for book_name, first_id in book_names.items():
+    for book_name in book_names:
         print(f"Processing book: {book_name}")
-        try:
-            retrieved_docs = process_document_for_book(query, book_name, query_embedding, embedding_model,first_id)
-            
-            # 중복 문서 제거
-            for doc in retrieved_docs:
-                content_hash = hash(doc.page_content)
-                if content_hash not in seen_contents:
-                    filtered_docs.append(doc)
-                    seen_contents.add(content_hash)
-        except Exception as e:
-            print(f"Error processing book '{book_name}': {e}")
-    
-    print(f"Total unique documents retrieved: {len(filtered_docs)}")
+
+        retrieved_docs,table_docs = process_document_for_book(query, book_name, query_embedding, embedding_model)
+        
+    print(f"Total unique documents retrieved: {len(retrieved_docs)}")
     
 
     # 13. Ollama 모델 설정
@@ -169,10 +161,10 @@ def 백_inference(query, book_names):
         template="Answer the question based only on the following context:\n    {context}\n    Question: {question}\n    Format the answer as follows: \"답변 : [answer]\".\n "
     )
 
-    print(len(filtered_docs))
+    print(len(retrieved_docs))
     # 15. 체인 설정
     context_chain = RunnableMap({
-        'context': lambda x: "\n".join([str(doc.page_content) for doc in filtered_docs]),  
+        'context': lambda x: "\n".join([str(doc.page_content) for doc in retrieved_docs]),  
         'question': RunnablePassthrough()
     })
 
@@ -210,15 +202,18 @@ def 백_inference(query, book_names):
     print(f'Executing RAG chain for query: {query}')
 
     try:
-        
         result = chain.invoke({
-            'context': filtered_docs, 
+            'context': retrieved_docs, 
             'question': query
             })
-        print(f'Result for query: {result}')
+        # print(f'Result for query: {result}')
         # output.append(result)
         # 모델 출력에서 답변 부분만 추출
         answer = result['text'].strip()  # 필요시 'text'를 실제 반환 필드명으로 변경
+
+        for doc in table_docs:
+            answer+= "\n"+ doc.page_content
+            print("\n")
         formatted_answer = format_text(answer)
         # 결과를 JSON 파일에 저장
         save_results({'query': query, 'answer': formatted_answer}, json_file_path)
@@ -230,8 +225,8 @@ def 백_inference(query, book_names):
     return formatted_answer
 
 
-book_names = {"견고한데이터엔지니어링":39, "데이터플랫폼설계구축":27}
-
-query = "새로 서비스를 개발하는 신생업체의 경우 클라우드, 온프레미스 어떤것을 추천해?"
+# book_names = {"견고한데이터엔지니어링":39, "데이터플랫폼설계구축":27, "aws":21}
+book_names = {"견고한데이터엔지니어링", "aws"}
+query = "단일 퍼블릭 서브넷 VPC 실습 환경 구성에 대한 단계별 가이드"
 answer=백_inference(query, book_names)
 print(f"Final Answer: {answer}")
