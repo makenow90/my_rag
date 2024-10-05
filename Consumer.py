@@ -37,21 +37,22 @@ def process_message(channel, method, body):
         print(author_info)
     except ValueError:
         print("Invalid message format")
+        # 아까 basic_ack=false로 설정했어서, 지금 수동으로 보냄
         channel.basic_ack(delivery_tag=method.delivery_tag)
         return
     
     if query.startswith('!백'):
-        book_names =  {"견고한데이터엔지니어링", "aws","데이터플랫폼설계구축"}
+        book_names =  {"견고한데이터엔지니어링", "aws", "데이터플랫폼설계구축"}
         query=query.replace('!백','')
-        answer=백_inference(query, book_names)
+        answer,table_docs=백_inference(query, book_names)
     elif query.startswith('!운동'):
         book_names =  {"백년운동"}
         query=query.replace('!운동','')
-        answer=운동_inference(query, book_names)
+        answer,table_docs=운동_inference(query, book_names)
 
     print(f"sent query: {query}")
-    
-
+    print(f"큐 보내기전 답변: {answer}")
+    print(f"table docs: {table_docs[:20]}")
     # 결과를 다시 합침 (답변|작성자 정보|ID)
     final_message = f"{answer}뀳{author_info}"
 
@@ -65,10 +66,25 @@ def process_message(channel, method, body):
             delivery_mode=2  # 메시지 내구성 설정
         )
     )
+    print(f"Sent '{final_message}' to out_queue")
+    
+    if table_docs is not None:
+            # 결과를 다시 합침 (답변|작성자 정보|ID)
+        final_message = f"{table_docs}뀳{author_info}"
 
+        # 처리된 question을 out_queue에 전송
+        channel.queue_declare(queue='out_queue', durable=True)  # out_queue 선언
+        channel.basic_publish(
+            exchange='',
+            routing_key='out_queue',
+            body=final_message.encode(),  # 인코딩하여 전송
+            properties=pika.BasicProperties(
+                delivery_mode=2  # 메시지 내구성 설정
+            )
+        )
+        print(f"Sent '{final_message}' to out_queue")
     # 메시지 소비 후 RabbitMQ 서버에 메시지를 처리했음을 알림 (ACK)
     # channel.basic_ack(delivery_tag=method.delivery_tag)
-    print(f"Sent '{final_message}' to out_queue")
     # print(f"Sent '{question}' to out_queue")
 
     # 메시지 소비 후 RabbitMQ 서버에 메시지를 처리했음을 알림(ACK, acknowledgment). 따라서 메시지가 큐에서 제거됨
@@ -90,8 +106,8 @@ def consume_messages(channel):
             # 큐에서 데이터 가져온거 성공하면 메세지 처리함
             if method_frame:
                 process_message(channel, method_frame, body)
-            else:
-                print("No messages in queue.")
+            # else:
+            #     print("No messages in queue.")
         # 예외 발생하면 재연결 : RabbitMQ 브로커가 연결을 강제로 닫았을 때, AMQP 프로토콜과 관련된 채널 오류가 발생했을 때, 
         # 네트워크 연결이 끊기거나 문제로 인해 스트림이 중단되었을 때
         except (pika.exceptions.ConnectionClosedByBroker, pika.exceptions.AMQPChannelError, pika.exceptions.StreamLostError) as e:

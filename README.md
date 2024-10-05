@@ -7,13 +7,13 @@
 
     # 백엔드 관련 질문 '백_inference.py' 의 '백_inference'함수 불러옴
     if query.startswith('!백'):
-        book_names =  {"견고한데이터엔지니어링":39, "데이터플랫폼설계구축":27}
+        book_names =  {"견고한데이터엔지니어링", "데이터플랫폼설계구축"}
         query=query.replace('!백','')
         answer=백_inference(query, book_names)
 
     # 운동 관련 질문 '운동_inference.py' 의 '운동_inference'함수 불러옴
     elif query.startswith('!운동'):
-        book_names =  {"백년운동":21}
+        book_names =  {"백년운동"}
         query=query.replace('!운동','')
         answer=운동_inference(query, book_names)
 ```

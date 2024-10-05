@@ -125,12 +125,14 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     # 테이블 문서 추출
     table_docs, retrieved_docs = extract_table_docs(retrieved_docs)
     print(f"테이블 제거 문서 개수: {len(retrieved_docs)}")
-
+    print(f"테이블 문서 개수: {len(table_docs)}")
     return retrieved_docs,table_docs
 
 
 # 메인 코드: 여러 교재를 처리
 def 백_inference(query, book_names):
+    table_docs = []
+    retrieved_docs=[]
     embedding_model = HuggingFaceEmbeddings(
         model_name='upskyy/bge-m3-korean',
         model_kwargs={'device': 'cuda'},
@@ -143,11 +145,14 @@ def 백_inference(query, book_names):
     for book_name in book_names:
         print(f"Processing book: {book_name}")
 
-        retrieved_docs,table_docs = process_document_for_book(query, book_name, query_embedding, embedding_model)
+        docs, tables = process_document_for_book(query, book_name, query_embedding, embedding_model)
+        # retrieved_docs와 table_docs에 각각 축적
+        retrieved_docs += docs  # 새로운 문서들을 추가
+        table_docs += tables  # 새로운 테이블들을 추가
         
     print(f"Total unique documents retrieved: {len(retrieved_docs)}")
     
-
+    print(table_docs)
     # 13. Ollama 모델 설정
     # model = ChatOllama(model="llama3.1:70b", temperature=0.5)gemma2:27b
     # model = ChatOllama(model="bnksys/yanolja-eeve-korean-instruct-10.8b", temperature=0.5)
@@ -211,10 +216,21 @@ def 백_inference(query, book_names):
         # 모델 출력에서 답변 부분만 추출
         answer = result['text'].strip()  # 필요시 'text'를 실제 반환 필드명으로 변경
 
-        for doc in table_docs:
-            answer+= "\n"+ doc.page_content
-            print("\n")
+        # for doc in table_docs[:1]:
+        #     answer+= "\n"+ doc.page_content
+        #     print("\n")
         formatted_answer = format_text(answer)
+        print()
+        # table_docs가 리스트일 경우에 대한 처리
+        if table_docs is not None:
+            # 리스트 내 각 항목에 대해 format_text 적용
+            table_docs = "\n".join([str(doc.page_content) for doc in table_docs])
+                # 리스트가 아닐 경우, 일반 문자열로 처리
+            table_docs = format_text(table_docs)
+        else:
+            table_docs=''
+
+        # print(f'3333333333333{table_docs}')
         # 결과를 JSON 파일에 저장
         save_results({'query': query, 'answer': formatted_answer}, json_file_path)
         
@@ -222,11 +238,12 @@ def 백_inference(query, book_names):
         print(f'Error during RAG chain execution for query: {e}')
         return None
     # 반환된 문서 리스트 반환
-    return formatted_answer
+    return formatted_answer[:1900], table_docs[:1900]
 
 
 # book_names = {"견고한데이터엔지니어링":39, "데이터플랫폼설계구축":27, "aws":21}
 book_names = {"견고한데이터엔지니어링", "aws"}
 query = "단일 퍼블릭 서브넷 VPC 실습 환경 구성에 대한 단계별 가이드"
-answer=백_inference(query, book_names)
+answer,table_docs=백_inference(query, book_names)
 print(f"Final Answer: {answer}")
+print(f"Table Docs: {table_docs}")

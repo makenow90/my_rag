@@ -41,7 +41,7 @@ def find_metadata_index(doc_id, metadata):
 def create_document(doc_metadata):
     content = ""
     # 메타데이터의 'type'에 따라 문서 내용을 다르게 구성
-    if doc_metadata["type"] == "table":
+    if doc_metadata["type"] == "tables":
         content += doc_metadata["content"] + "\n"
     if doc_metadata["type"] == "texts":
         content += doc_metadata["content"] + "\n"
@@ -55,7 +55,7 @@ def extract_table_docs(documents):
     table_docs = []
     texts_docs=[]
     for doc in documents:
-        if doc.metadata.get("type") == "table":  # 메타데이터에서 'type'이 'table'인 경우
+        if doc.metadata.get("type") == "tables":  # 메타데이터에서 'type'이 'table'인 경우
             table_docs.append(doc)
         elif doc.metadata.get("type") == "texts":  # 메타데이터에서 'type'이 'table'인 경우
             texts_docs.append(doc)
@@ -116,7 +116,7 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     # 검색기 설정
     retriever = vectorstore.as_retriever(
         search_type="similarity_score_threshold",
-        search_kwargs={'k': 50, "score_threshold": 0.3}
+        search_kwargs={'k': 20, "score_threshold": 0.35}
     )
 
     # 질문과 관련된 문서 추출
@@ -141,12 +141,14 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     # 테이블 문서 추출
     table_docs, retrieved_docs = extract_table_docs(retrieved_docs)
     print(f"테이블 제거 문서 개수: {len(retrieved_docs)}")
-
+    print(f"테이블 문서 개수: {len(table_docs)}")
     return retrieved_docs,table_docs
 
 
 # 메인 코드: 여러 교재를 처리
 def 운동_inference(query, book_names):
+    table_docs = []
+    retrieved_docs=[]
     embedding_model = HuggingFaceEmbeddings(
         model_name='upskyy/bge-m3-korean',
         model_kwargs={'device': 'cuda'},
@@ -160,7 +162,12 @@ def 운동_inference(query, book_names):
         print(f"Processing book: {book_name}")
         if book_name=='백년운동':
             query = convert_common_to_medical(query)
-        retrieved_docs,table_docs = process_document_for_book(query, book_name, query_embedding, embedding_model)
+        
+        docs, tables = process_document_for_book(query, book_name, query_embedding, embedding_model)
+        # retrieved_docs와 table_docs에 각각 축적
+        retrieved_docs += docs  # 새로운 문서들을 추가
+        table_docs += tables  # 새로운 테이블들을 추가
+        
         
     print(f"Total unique documents retrieved: {len(retrieved_docs)}")
     
@@ -217,7 +224,7 @@ def 운동_inference(query, book_names):
 
     # 16. 체인 실행
     print(f'Executing RAG chain for query: {query}')
-
+    print(table_docs)
     try:
         result = chain.invoke({
             'context': retrieved_docs, 
@@ -228,10 +235,18 @@ def 운동_inference(query, book_names):
         # 모델 출력에서 답변 부분만 추출
         answer = result['text'].strip()  # 필요시 'text'를 실제 반환 필드명으로 변경
 
-        for doc in table_docs:
-            answer+= "\n"+ doc.page_content
-            print("\n")
+        # for doc in table_docs:
+        #     answer+= "\n"+ doc.page_content
+        #     print("\n")
         formatted_answer = format_text(answer)
+        # table_docs가 리스트일 경우에 대한 처리
+        if table_docs is not None:
+            # 리스트 내 각 항목에 대해 format_text 적용
+            table_docs = "\n".join([str(doc.page_content) for doc in table_docs])
+                # 리스트가 아닐 경우, 일반 문자열로 처리
+            table_docs = format_text(table_docs)
+        else:
+            table_docs=''
         # 결과를 JSON 파일에 저장
         save_results({'query': query, 'answer': formatted_answer}, json_file_path)
         
@@ -239,9 +254,10 @@ def 운동_inference(query, book_names):
         print(f'Error during RAG chain execution for query: {e}')
         return None
     # 반환된 문서 리스트 반환
-    return formatted_answer
+    return formatted_answer[:1900], table_docs[:1900]
 
 book_names = {"백년운동"}
-query = "가슴 운동 루틴 알려줘"
-answer=운동_inference(query, book_names)
+query = "동작별로 무릎에 부담이 가능정도를 정리해줘"
+answer,table_docs=운동_inference(query, book_names)
 print(f"Final Answer: {answer}")
+print(f"Table Docs: {table_docs}")
