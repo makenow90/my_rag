@@ -3,15 +3,16 @@ import base64
 
 import faiss
 import numpy as np
-from langchain.vectorstores import FAISS
-from langchain.docstore.in_memory import InMemoryDocstore
+from langchain_community.vectorstores import FAISS
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from langchain.schema.runnable import RunnablePassthrough, RunnableMap
 from langchain_community.chat_models import ChatOllama
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from dotenv import load_dotenv
-from langchain.embeddings import HuggingFaceEmbeddings
+
 import base64
 import json
 from typing import TypedDict
@@ -19,6 +20,13 @@ import os
 import json
 import pickle
 from langchain_teddynote import logging
+from langchain_community.retrievers import BM25Retriever
+from langchain_teddynote.retrievers import (
+    KiwiBM25Retriever,
+    KkmaBM25Retriever,
+    OktBM25Retriever,
+)
+from langchain_community.document_transformers import LongContextReorder
 
 load_dotenv()
 # 프로젝트 이름을 입력합니다.
@@ -73,10 +81,10 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
 
     # 메타데이터 파일 경로 설정
     metadata_filepath = f"data\\metadata\\{base_name}.pkl"
-    metadata = load_metadata(metadata_filepath)
+    source_docs = load_metadata(metadata_filepath)
 
     # 3. 문서 리스트 작성
-    documents = [create_document(doc_metadata) for doc_metadata in metadata]
+    documents = [create_document(doc_metadata) for doc_metadata in source_docs]
     print(f"총 문서 수: {len(documents)}")
 
     # 문서 리스트 작성
@@ -92,7 +100,7 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     
     
     # index_to_docstore_id 매핑
-    index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), metadata) for i in range(len(ids)) if ids[i] != -1}
+    index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), source_docs) for i in range(len(ids)) if ids[i] != -1}
     print(index_to_docstore_id)
     # VectorStore 생성
     vectorstore = FAISS(embedding_function=embedding_model, index=faiss_index, docstore=docstore, index_to_docstore_id=index_to_docstore_id)
@@ -100,15 +108,29 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     # 검색기 설정
     retriever = vectorstore.as_retriever(
         search_type="similarity_score_threshold",
-        search_kwargs={'k': 20, "score_threshold": 0.35}
+        search_kwargs={'k': 20, "score_threshold": 0.30}
     )
 
-    # 질문과 관련된 문서 추출
-    retrieved_docs = retriever.get_relevant_documents(query)
-    
-    for i, doc in zip(ids, retrieved_docs):
-        print(f"문서 ID: {i}, 내용 요약: {doc.page_content[:30]}")  # 처음 100자만 출력
+    # bm25 retriever와 faiss retriever를 초기화합니다.
+    bm25_retriever = BM25Retriever.from_documents(
+        documents
+    )
+    bm25_retriever.k = 20  # BM25Retriever의 검색 결과 개수를 5로 설정합니다.
 
+    sparse_docs = bm25_retriever.get_relevant_documents(query)
+    # 질문과 관련된 문서 추출
+    dense_docs = retriever.get_relevant_documents(query)
+    
+    retrieved_docs=sparse_docs+dense_docs
+    
+    # 검색된 문서 출력
+    for i, doc in enumerate(sparse_docs):
+        print(f"sparse 문서 {i + 1}: {doc.page_content[:30]}...")  # 문서의 처음 200자 출력
+
+    for i, doc in zip(ids, dense_docs):
+        print(f"dense 문서 ID: {i+1}, 내용 요약: {doc.page_content[:30]}")  # 처음 100자만 출력
+
+    retrieved_docs=sparse_docs+dense_docs
     print(f"검색된 문서 개수: {len(retrieved_docs)}")
     print(len(retrieved_docs))
 
@@ -126,7 +148,9 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     table_docs, retrieved_docs = extract_table_docs(retrieved_docs)
     print(f"테이블 제거 문서 개수: {len(retrieved_docs)}")
     print(f"테이블 문서 개수: {len(table_docs)}")
-    return retrieved_docs,table_docs
+    reordering = LongContextReorder()
+    reordered_docs = reordering.transform_documents(retrieved_docs)
+    return reordered_docs,table_docs
 
 
 # 메인 코드: 여러 교재를 처리
@@ -151,8 +175,6 @@ def 백_inference(query, book_names):
         table_docs += tables  # 새로운 테이블들을 추가
         
     print(f"Total unique documents retrieved: {len(retrieved_docs)}")
-    
-    print(table_docs)
     # 13. Ollama 모델 설정
     # model = ChatOllama(model="llama3.1:70b", temperature=0.5)gemma2:27b
     # model = ChatOllama(model="bnksys/yanolja-eeve-korean-instruct-10.8b", temperature=0.5)
@@ -205,7 +227,7 @@ def 백_inference(query, book_names):
 
     # 16. 체인 실행
     print(f'Executing RAG chain for query: {query}')
-
+    print(table_docs)
     try:
         result = chain.invoke({
             'context': retrieved_docs, 
@@ -230,7 +252,6 @@ def 백_inference(query, book_names):
         else:
             table_docs=''
 
-        # print(f'3333333333333{table_docs}')
         # 결과를 JSON 파일에 저장
         save_results({'query': query, 'answer': formatted_answer}, json_file_path)
         

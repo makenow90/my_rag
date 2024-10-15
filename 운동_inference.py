@@ -3,15 +3,16 @@ import base64
 
 import faiss
 import numpy as np
-from langchain.vectorstores import FAISS
-from langchain.docstore.in_memory import InMemoryDocstore
+from langchain_community.vectorstores import FAISS
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from langchain.schema.runnable import RunnablePassthrough, RunnableMap
 from langchain_community.chat_models import ChatOllama
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from dotenv import load_dotenv
-from langchain.embeddings import HuggingFaceEmbeddings
+
 import base64
 import json
 from typing import TypedDict
@@ -19,6 +20,14 @@ import os
 import json
 import pickle
 from langchain_teddynote import logging
+from langchain_community.retrievers import BM25Retriever
+from langchain_teddynote.retrievers import (
+    KiwiBM25Retriever,
+    KkmaBM25Retriever,
+    OktBM25Retriever,
+)
+from langchain_community.document_transformers import LongContextReorder
+
 
 load_dotenv()
 # 프로젝트 이름을 입력합니다.
@@ -62,8 +71,8 @@ def extract_table_docs(documents):
     return table_docs,texts_docs
 
 def convert_common_to_medical(query):
-    query=query.replace('운동','')
     common_to_medical_terms = {
+    "고관절":"엉덩관절",
     "가슴": "대흉근",
     "엉덩이": "둔근",
     "등": "활배근",
@@ -89,10 +98,10 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
 
     # 메타데이터 파일 경로 설정
     metadata_filepath = f"data\\metadata\\{base_name}.pkl"
-    metadata = load_metadata(metadata_filepath)
+    source_docs = load_metadata(metadata_filepath)
 
     # 3. 문서 리스트 작성
-    documents = [create_document(doc_metadata) for doc_metadata in metadata]
+    documents = [create_document(doc_metadata) for doc_metadata in source_docs]
     print(f"총 문서 수: {len(documents)}")
 
     # 문서 리스트 작성
@@ -100,7 +109,6 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     docstore = InMemoryDocstore(dict(enumerate(documents)))
 
     # FAISS 인덱스에서 검색 수행
-    # query_embedding = embedding_model.embed_documents([query])[0]
     D, I = faiss_index.search(np.array([query_embedding]).astype(np.float32), faiss_index.ntotal)
     
     # 검색된 IDs를 1차원 배열로 변환
@@ -108,23 +116,34 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     
     
     # index_to_docstore_id 매핑
-    index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), metadata) for i in range(len(ids)) if ids[i] != -1}
-    print(index_to_docstore_id)
+    index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), source_docs) for i in range(len(ids)) if ids[i] != -1}
+    # print(index_to_docstore_id)
     # VectorStore 생성
     vectorstore = FAISS(embedding_function=embedding_model, index=faiss_index, docstore=docstore, index_to_docstore_id=index_to_docstore_id)
     
     # 검색기 설정
     retriever = vectorstore.as_retriever(
         search_type="similarity_score_threshold",
-        search_kwargs={'k': 20, "score_threshold": 0.35}
+        search_kwargs={'k': 20, "score_threshold": 0.30}
     )
 
-    # 질문과 관련된 문서 추출
-    retrieved_docs = retriever.get_relevant_documents(query)
-    
-    for i, doc in zip(ids, retrieved_docs):
-        print(f"문서 ID: {i}, 내용 요약: {doc.page_content[:30]}")  # 처음 100자만 출력
+    bm25_retriever = BM25Retriever.from_documents(
+    documents
+    )
+    bm25_retriever.k = 20  # BM25Retriever의 검색 결과 개수를 5로 설정합니다.
 
+    sparse_docs = bm25_retriever.get_relevant_documents(query)
+    # 질문과 관련된 문서 추출
+    dense_docs = retriever.get_relevant_documents(query)
+    
+    # 검색된 문서 출력
+    for i, doc in enumerate(sparse_docs):
+        print(f"sparse 문서 {i + 1}: {doc.page_content[:30]}...")  # 문서의 처음 200자 출력
+
+    for i, doc in zip(ids, dense_docs):
+        print(f"dense 문서 ID: {i+1}, 내용 요약: {doc.page_content[:30]}")  # 처음 100자만 출력
+
+    retrieved_docs=sparse_docs+dense_docs
     print(f"검색된 문서 개수: {len(retrieved_docs)}")
     print(len(retrieved_docs))
 
@@ -142,7 +161,9 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     table_docs, retrieved_docs = extract_table_docs(retrieved_docs)
     print(f"테이블 제거 문서 개수: {len(retrieved_docs)}")
     print(f"테이블 문서 개수: {len(table_docs)}")
-    return retrieved_docs,table_docs
+    reordering = LongContextReorder()
+    reordered_docs = reordering.transform_documents(retrieved_docs)
+    return reordered_docs,table_docs
 
 
 # 메인 코드: 여러 교재를 처리
@@ -235,9 +256,6 @@ def 운동_inference(query, book_names):
         # 모델 출력에서 답변 부분만 추출
         answer = result['text'].strip()  # 필요시 'text'를 실제 반환 필드명으로 변경
 
-        # for doc in table_docs:
-        #     answer+= "\n"+ doc.page_content
-        #     print("\n")
         formatted_answer = format_text(answer)
         # table_docs가 리스트일 경우에 대한 처리
         if table_docs is not None:
@@ -254,10 +272,24 @@ def 운동_inference(query, book_names):
         print(f'Error during RAG chain execution for query: {e}')
         return None
     # 반환된 문서 리스트 반환
-    return formatted_answer[:1900], table_docs[:1900]
+    return formatted_answer[:1950], table_docs[:1950]
+
+# book_names = {"백년운동"}
+# query = "동작별로 무릎에 부담이 가능정도를 정리해줘"
+# answer,table_docs=운동_inference(query, book_names)
 
 book_names = {"백년운동"}
-query = "동작별로 무릎에 부담이 가능정도를 정리해줘"
-answer,table_docs=운동_inference(query, book_names)
+que=['신체에서 고관절 내전근의 역할은 무엇입니까?',#'반복 최대치(RM) 값과 관련하여 근력 운동의 중요성은 무엇입니까?','신체 활동을 측정하는 데 대사 당량(MET)의 중요성은 무엇입니까?','회전근 개는 스트레스 하에서 어깨 안정성을 어떻게 지원합니까?'
+    ]
+answer=[]
+for i in que:
+    # output,table_docs=운동_inference(query[i], book_names)
+    output,table_docs=운동_inference(i, book_names)
+    if output is None:
+        answer.append('None')
+    else:
+        answer.append(output)
+
+
 print(f"Final Answer: {answer}")
-print(f"Table Docs: {table_docs}")
+# print(f"Table Docs: {table_docs}")
