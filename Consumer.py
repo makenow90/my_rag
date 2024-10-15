@@ -3,7 +3,7 @@ import time
 import psutil
 from datetime import datetime
 import threading
-
+import json
 from 백_inference import 백_inference
 from 운동_inference import 운동_inference
 
@@ -31,58 +31,63 @@ def process_message(channel, method, body):
 
     # 메시지를 |로 분리
     try:
-        parts = body.decode().split("뀳")
-        query = parts[0]  # 첫 번째 부분은 query (질문)
-        author_info = "뀳".join(parts[1:])  # 나머지 부분은 작성자 정보와 ID
-        print(author_info)
+        message_body = body.decode()
+        message_data = json.loads(message_body)
+
+        query = message_data.get('message_content')  # 첫 번째 부분은 query (질문)
+        author_info = message_data.get('author_info')  # 나머지 부분은 작성자 정보와 ID
+        channel_id = message_data.get('channel_id')   # 채널 ID
+
     except ValueError:
         print("Invalid message format")
         # 아까 basic_ack=false로 설정했어서, 지금 수동으로 보냄
         channel.basic_ack(delivery_tag=method.delivery_tag)
         return
-    
+    print(f'지ㅣㅣㅣㅣㅣㅣㅣㅣㅣㅣ문{query}')
     if query.startswith('!백'):
         book_names =  {"견고한데이터엔지니어링", "aws", "데이터플랫폼설계구축"}
         query=query.replace('!백','')
-        answer,table_docs=백_inference(query, book_names)
+        answer,table_answers=백_inference(query, book_names)
     elif query.startswith('!운동'):
         book_names =  {"백년운동"}
-        query=query.replace('!운동','')
-        answer,table_docs=운동_inference(query, book_names)
+        answer,table_answers=운동_inference(query, book_names)
+        # table_answers=['c:\\Users\\makenow\\prj\\my_rag\\data\\백년운동\\백년운동\\60.png',
+        # 'c:\\Users\\makenow\\prj\\my_rag\\data\\백년운동\\백년운동\\60.png']
+        # answer='텍스트  '
 
     print(f"sent query: {query}")
-    print(f"큐 보내기전 답변: {answer}")
-    print(f"table docs: {table_docs[:20]}")
-    # 결과를 다시 합침 (답변|작성자 정보|ID)
-    final_message = f"{answer}뀳{author_info}"
 
-    # 처리된 question을 out_queue에 전송
-    channel.queue_declare(queue='out_queue', durable=True)  # out_queue 선언
-    channel.basic_publish(
-        exchange='',
-        routing_key='out_queue',
-        body=final_message.encode(),  # 인코딩하여 전송
-        properties=pika.BasicProperties(
-            delivery_mode=2  # 메시지 내구성 설정
-        )
-    )
-    print(f"Sent '{final_message}' to out_queue")
-    
-    if table_docs is not None:
-            # 결과를 다시 합침 (답변|작성자 정보|ID)
-        final_message = f"{table_docs}뀳{author_info}"
+    print(f"sent answer: {answer}")
+    if answer is not None:
+        print(f"큐 보내기전 답변: {answer}")
+        text_data = {"type": "text", "text_answers": answer,'author_info':author_info,'channel_id':channel_id}
 
         # 처리된 question을 out_queue에 전송
         channel.queue_declare(queue='out_queue', durable=True)  # out_queue 선언
         channel.basic_publish(
             exchange='',
             routing_key='out_queue',
-            body=final_message.encode(),  # 인코딩하여 전송
+            body=json.dumps(text_data), # 인코딩하여 전송
             properties=pika.BasicProperties(
                 delivery_mode=2  # 메시지 내구성 설정
             )
         )
-        print(f"Sent '{final_message}' to out_queue")
+        print(f"Sent '{text_data}' to out_queue")
+    
+    if table_answers is not None:
+        table_data = {"type": "table", "table_answers": table_answers,'author_info':author_info,'channel_id':channel_id}
+
+        # 처리된 question을 out_queue에 전송
+        channel.queue_declare(queue='out_queue', durable=True)  # out_queue 선언
+        channel.basic_publish(
+            exchange='',
+            routing_key='out_queue',
+            body=json.dumps(table_data),  # 인코딩하여 전송
+            properties=pika.BasicProperties(
+                delivery_mode=2  # 메시지 내구성 설정
+            )
+        )
+
     # 메시지 소비 후 RabbitMQ 서버에 메시지를 처리했음을 알림 (ACK)
     # channel.basic_ack(delivery_tag=method.delivery_tag)
     # print(f"Sent '{question}' to out_queue")

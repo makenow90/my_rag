@@ -65,7 +65,7 @@ def extract_table_docs(documents):
     texts_docs=[]
     for doc in documents:
         if doc.metadata.get("type") == "tables":  # 메타데이터에서 'type'이 'table'인 경우
-            table_docs.append(doc)
+            table_docs.append(doc.metadata.get("source"))
         elif doc.metadata.get("type") == "texts":  # 메타데이터에서 'type'이 'table'인 경우
             texts_docs.append(doc)
     return table_docs,texts_docs
@@ -187,8 +187,10 @@ def 운동_inference(query, book_names):
         docs, tables = process_document_for_book(query, book_name, query_embedding, embedding_model)
         # retrieved_docs와 table_docs에 각각 축적
         retrieved_docs += docs  # 새로운 문서들을 추가
-        table_docs += tables  # 새로운 테이블들을 추가
-        
+
+        if tables:
+            for table in tables:
+                table_docs.append(f'{os.getcwd()}\\data\\{book_name}\\{book_name}\\{table}.png')
         
     print(f"Total unique documents retrieved: {len(retrieved_docs)}")
     
@@ -257,14 +259,16 @@ def 운동_inference(query, book_names):
         answer = result['text'].strip()  # 필요시 'text'를 실제 반환 필드명으로 변경
 
         formatted_answer = format_text(answer)
-        # table_docs가 리스트일 경우에 대한 처리
-        if table_docs is not None:
-            # 리스트 내 각 항목에 대해 format_text 적용
-            table_docs = "\n".join([str(doc.page_content) for doc in table_docs])
-                # 리스트가 아닐 경우, 일반 문자열로 처리
-            table_docs = format_text(table_docs)
-        else:
-            table_docs=''
+
+        # # table_docs가 리스트일 경우에 대한 처리
+        # if table_docs is not None:
+        #     # 리스트 내 각 항목에 대해 format_text 적용
+        #     table_docs = "\n".join([str(doc.page_content) for doc in table_docs])
+        #         # 리스트가 아닐 경우, 일반 문자열로 처리
+        #     table_docs = format_text(table_docs)
+        # else:
+        #     table_docs=''
+
         # 결과를 JSON 파일에 저장
         save_results({'query': query, 'answer': formatted_answer}, json_file_path)
         
@@ -272,14 +276,14 @@ def 운동_inference(query, book_names):
         print(f'Error during RAG chain execution for query: {e}')
         return None
     # 반환된 문서 리스트 반환
-    return formatted_answer[:1950], table_docs[:1950]
+    return formatted_answer[:1950], table_docs
 
 # book_names = {"백년운동"}
 # query = "동작별로 무릎에 부담이 가능정도를 정리해줘"
 # answer,table_docs=운동_inference(query, book_names)
 
 book_names = {"백년운동"}
-que=['신체에서 고관절 내전근의 역할은 무엇입니까?',#'반복 최대치(RM) 값과 관련하여 근력 운동의 중요성은 무엇입니까?','신체 활동을 측정하는 데 대사 당량(MET)의 중요성은 무엇입니까?','회전근 개는 스트레스 하에서 어깨 안정성을 어떻게 지원합니까?'
+que=['반복 최대치(RM) 값과 관련하여 근력 운동의 중요성은 무엇입니까?','신체 활동을 측정하는 데 대사 당량(MET)의 중요성은 무엇입니까?','회전근 개는 스트레스 하에서 어깨 안정성을 어떻게 지원합니까?'
     ]
 answer=[]
 for i in que:

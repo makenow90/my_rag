@@ -4,6 +4,7 @@ import os
 import aio_pika
 import asyncio
 from datetime import datetime
+import json
 
 # 현재 날짜와 시간 가져오기
 now = datetime.now()
@@ -23,12 +24,12 @@ async def send_to_rabbitmq(message_content, message_priority, author_name, chann
         channel = await connection.channel()  # 채널 생성
 
         # 질문과 작성자 이름, 채널 ID를 구분자(예: "뀳")로 묶어서 전송
-        message_body = f"{message_content}뀳{author_name}뀳{channel_id}"
 
+        message_body = {"message_content": message_content,'author_info':author_name,'channel_id':channel_id}
         # 기본 큐를 in_queue로 선택하고 메시지를 전송
         await channel.default_exchange.publish(
             aio_pika.Message(
-                body=message_body.encode(),
+                body=json.dumps(message_body).encode('utf-8'),
                 # PERSISTENT 추가로 내구성 있는 메시지로 설정. RabbitMQ가 재시작되더라도 메시지를 잃지 않고 유지
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
                 # 우선순위 설정
@@ -36,34 +37,90 @@ async def send_to_rabbitmq(message_content, message_priority, author_name, chann
             ),
             routing_key='in_queue'  # in_queue로 전송
         )
+
+
+
+
         print(f"Sent '{message_content}' with priority {message_priority} and author '{author_name}' to in_queue")
 
 # RabbitMQ에서 out_queue로부터 비동기적으로 답변을 수신하는 함수
+# async def consume_out_queue():
+#     connection = await aio_pika.connect_robust("amqp://localhost/")
+#     async with connection:
+#         channel = await connection.channel()
+#         queue = await channel.declare_queue('out_queue', durable=True)
+
+#         # RabbitMQ 큐에서 메시지를 비동기적으로 순회할 수 있는 이터레이터를 생성합니다. 이 이터레이터를 사용해 큐에 쌓여 있는 메시지를 하나씩 처리
+#         async with queue.iterator() as queue_iter:
+#             # queue_iter를 사용해 큐에서 하나씩 메시지를 가져오는 비동기 루프
+#             async for message in queue_iter:
+#                 # 메세지가 처리 되고 있다는걸 RabbitMQ에 알리고, 완료되면 **ACK(acknowledgment)**를
+#                 # RabbitMQ에 전송해 메시지가 성공적으로 처리되었음을 알림
+#                 async with message.process():
+#                     # 수신한 메시지 파싱 (질문, 작성자 이름, 채널 ID가 구분자로 묶여 있음)
+#                     message_body = message.body.decode()
+#                     response, author_name, channel_id = message_body.split("뀳")
+                    
+#                     print(f"Received response from out_queue: {response} for {author_name} in channel {channel_id}")
+#                     # Discord에서 채널 ID를 이용해 채널을 찾음
+#                     discord_channel = client.get_channel(int(channel_id))
+#                     if discord_channel:
+#                         # 해당 채널로 작성자에게 응답 전송
+#                         await discord_channel.send(response)
+#                     else:
+#                         print(f"Channel ID {channel_id} not found")
 async def consume_out_queue():
     connection = await aio_pika.connect_robust("amqp://localhost/")
     async with connection:
         channel = await connection.channel()
         queue = await channel.declare_queue('out_queue', durable=True)
 
-        # RabbitMQ 큐에서 메시지를 비동기적으로 순회할 수 있는 이터레이터를 생성합니다. 이 이터레이터를 사용해 큐에 쌓여 있는 메시지를 하나씩 처리
+        # RabbitMQ 큐에서 메시지를 비동기적으로 순회할 수 있는 이터레이터를 생성합니다.
         async with queue.iterator() as queue_iter:
-            # queue_iter를 사용해 큐에서 하나씩 메시지를 가져오는 비동기 루프
+            # 큐에서 하나씩 메시지를 가져오는 비동기 루프
             async for message in queue_iter:
-                # 메세지가 처리 되고 있다는걸 RabbitMQ에 알리고, 완료되면 **ACK(acknowledgment)**를
-                # RabbitMQ에 전송해 메시지가 성공적으로 처리되었음을 알림
                 async with message.process():
-                    # 수신한 메시지 파싱 (질문, 작성자 이름, 채널 ID가 구분자로 묶여 있음)
+                    # 수신한 메시지 파싱
                     message_body = message.body.decode()
-                    response, author_name, channel_id = message_body.split("뀳")
+                    message_data = json.loads(message_body)
+
+                    message_type = message_data.get("type")
+                    channel_id = message_data.get("channel_id")
+                    author_info = message_data.get("author_info")
                     
-                    print(f"Received response from out_queue: {response} for {author_name} in channel {channel_id}")
                     # Discord에서 채널 ID를 이용해 채널을 찾음
                     discord_channel = client.get_channel(int(channel_id))
+                    
                     if discord_channel:
-                        # 해당 채널로 작성자에게 응답 전송
-                        await discord_channel.send(response)
+                        if message_type == "table":
+                            # 테이블 데이터(파일 경로 리스트) 처리
+                            table_answers = message_data.get("table_answers")
+                            print(f"Table answers: {table_answers}")
+                            if table_answers:
+                                files_to_attach = []
+                                for file_path in table_answers:
+                                    # 파일이 존재하는지 확인 후 Discord 파일 첨부 리스트에 추가
+                                    if os.path.exists(file_path):
+                                        files_to_attach.append(discord.File(file_path))
+                                    else:
+                                        print(f"File not found: {file_path}")
+                                        
+                                print(files_to_attach)
+                                if files_to_attach:
+                                    await discord_channel.send(files=files_to_attach)
+                                else:
+                                    await discord_channel.send(f"No valid table files found. - {author_info}")
+
+                        elif message_type == "text":
+                            # 일반 텍스트 메시지 처리
+                            text_answers = message_data.get("text_answers")
+                            if text_answers:
+                                await discord_channel.send(text_answers)
+                        else:
+                            print(f"Unknown message type: {message_type}")
                     else:
                         print(f"Channel ID {channel_id} not found")
+
 
 # 디스코드 클라이언트 설정
 # intents는 Discord API에서 특정 이벤트 유형에 대한 접근을 허용하거나 제한하는 설정을 관리하는 개념. 

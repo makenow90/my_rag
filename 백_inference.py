@@ -63,7 +63,7 @@ def extract_table_docs(documents):
     texts_docs=[]
     for doc in documents:
         if doc.metadata.get("type") == "table":  # 메타데이터에서 'type'이 'table'인 경우
-            table_docs.append(doc)
+            table_docs.append(doc.metadata.get("source"))
         elif doc.metadata.get("type") == "texts":  # 메타데이터에서 'type'이 'table'인 경우
             texts_docs.append(doc)
     return table_docs,texts_docs
@@ -172,7 +172,9 @@ def 백_inference(query, book_names):
         docs, tables = process_document_for_book(query, book_name, query_embedding, embedding_model)
         # retrieved_docs와 table_docs에 각각 축적
         retrieved_docs += docs  # 새로운 문서들을 추가
-        table_docs += tables  # 새로운 테이블들을 추가
+        if tables:
+            for table in tables:
+                table_docs.append(f'{os.getcwd()}\\data\\{book_name}\\{book_name}\\{table}.png')
         
     print(f"Total unique documents retrieved: {len(retrieved_docs)}")
     # 13. Ollama 모델 설정
@@ -263,8 +265,8 @@ def 백_inference(query, book_names):
 
 
 # book_names = {"견고한데이터엔지니어링":39, "데이터플랫폼설계구축":27, "aws":21}
-book_names = {"견고한데이터엔지니어링", "aws"}
-query = "단일 퍼블릭 서브넷 VPC 실습 환경 구성에 대한 단계별 가이드"
-answer,table_docs=백_inference(query, book_names)
-print(f"Final Answer: {answer}")
-print(f"Table Docs: {table_docs}")
+# book_names = {"견고한데이터엔지니어링", "aws"}
+# query = "단일 퍼블릭 서브넷 VPC 실습 환경 구성에 대한 단계별 가이드"
+# answer,table_docs=백_inference(query, book_names)
+# print(f"Final Answer: {answer}")
+# print(f"Table Docs: {table_docs}")
