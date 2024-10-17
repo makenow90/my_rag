@@ -29,7 +29,6 @@ def connect_to_rabbitmq():
 def process_message(channel, method, body):
     print(f" body {datetime.now()} : {body.decode()}")
 
-    # 메시지를 |로 분리
     try:
         message_body = body.decode()
         message_data = json.loads(message_body)
@@ -43,18 +42,21 @@ def process_message(channel, method, body):
         # 아까 basic_ack=false로 설정했어서, 지금 수동으로 보냄
         channel.basic_ack(delivery_tag=method.delivery_tag)
         return
-    print(f'지ㅣㅣㅣㅣㅣㅣㅣㅣㅣㅣ문{query}')
+
+    image_answers=[]
     if query.startswith('!백'):
-        book_names =  {"견고한데이터엔지니어링", "aws", "데이터플랫폼설계구축"}
+        # book_names =  {"견고한데이터엔지니어링", "aws", "데이터플랫폼설계구축"}
+        book_names =  {"데이터플랫폼설계구축"}
         query=query.replace('!백','')
-        answer,table_answers=백_inference(query, book_names)
+        answer,table_answers,image_answers=백_inference(query, book_names)
     elif query.startswith('!운동'):
         book_names =  {"백년운동"}
-        answer,table_answers=운동_inference(query, book_names)
+        query=query.replace('!운동','')
+        answer,table_answers,image_answers=운동_inference(query, book_names)
         # table_answers=['c:\\Users\\makenow\\prj\\my_rag\\data\\백년운동\\백년운동\\60.png',
         # 'c:\\Users\\makenow\\prj\\my_rag\\data\\백년운동\\백년운동\\60.png']
         # answer='텍스트  '
-
+    
     print(f"sent query: {query}")
 
     print(f"sent answer: {answer}")
@@ -87,10 +89,19 @@ def process_message(channel, method, body):
                 delivery_mode=2  # 메시지 내구성 설정
             )
         )
+    if image_answers is not None:
+        image_data = {"type": "image", "image_answers": image_answers,'author_info':author_info,'channel_id':channel_id}
 
-    # 메시지 소비 후 RabbitMQ 서버에 메시지를 처리했음을 알림 (ACK)
-    # channel.basic_ack(delivery_tag=method.delivery_tag)
-    # print(f"Sent '{question}' to out_queue")
+        # 처리된 question을 out_queue에 전송
+        channel.queue_declare(queue='out_queue', durable=True)  # out_queue 선언
+        channel.basic_publish(
+            exchange='',
+            routing_key='out_queue',
+            body=json.dumps(image_data),  # 인코딩하여 전송
+            properties=pika.BasicProperties(
+                delivery_mode=2  # 메시지 내구성 설정
+            )
+        )
 
     # 메시지 소비 후 RabbitMQ 서버에 메시지를 처리했음을 알림(ACK, acknowledgment). 따라서 메시지가 큐에서 제거됨
     channel.basic_ack(delivery_tag=method.delivery_tag)

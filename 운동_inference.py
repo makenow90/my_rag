@@ -50,9 +50,13 @@ def find_metadata_index(doc_id, metadata):
 def create_document(doc_metadata):
     content = ""
     # 메타데이터의 'type'에 따라 문서 내용을 다르게 구성
-    if doc_metadata["type"] == "tables":
-        content += doc_metadata["content"] + "\n"
-    if doc_metadata["type"] == "texts":
+    # if doc_metadata["type"] == "table":
+    #     content += doc_metadata["content"] + "\n"
+
+    # if doc_metadata["type"] == "image":
+    #     content += doc_metadata["content"] + "\n"
+
+    if doc_metadata["type"] == "text":
         content += doc_metadata["content"] + "\n"
     
     # 추가적으로 다른 유형을 처리할 수 있음 (예: 'image_summary')
@@ -62,13 +66,16 @@ def create_document(doc_metadata):
 # 테이블과 텍스트를 분리하는 함수
 def extract_table_docs(documents):
     table_docs = []
-    texts_docs=[]
+    text_docs=[]
+    image_docs=[]
     for doc in documents:
-        if doc.metadata.get("type") == "tables":  # 메타데이터에서 'type'이 'table'인 경우
-            table_docs.append(doc.metadata.get("source"))
-        elif doc.metadata.get("type") == "texts":  # 메타데이터에서 'type'이 'table'인 경우
-            texts_docs.append(doc)
-    return table_docs,texts_docs
+        if doc.metadata.get("type") == "table":  # 메타데이터에서 'type'이 'table'인 경우
+            table_docs.append(doc.metadata.get("content"))
+        elif doc.metadata.get("type") == "image":  # 메타데이터에서 'type'이 'table'인 경우
+            image_docs.append(doc.metadata.get("content"))
+        elif doc.metadata.get("type") == "text":  # 메타데이터에서 'type'이 'table'인 경우
+            text_docs.append(doc)
+    return table_docs,image_docs,text_docs
 
 def convert_common_to_medical(query):
     common_to_medical_terms = {
@@ -89,7 +96,6 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     """특정 교재의 인덱스와 피클 파일을 로드하고 문서를 검색."""
     # 현재 경로에서 교재의 피클 파일 및 인덱스 파일 경로 설정
     base_name = base64.urlsafe_b64encode(book_name.encode('utf-8')).decode('utf-8')
-    # path_pickle = os.path.join(os.getcwd(), 'data', 'pickle', f"{base_name}.pkl")
     path_index = os.path.join(os.getcwd(), 'data', 'index', f"{base_name}.index")
 
     if not os.path.exists(path_index):
@@ -117,14 +123,13 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     
     # index_to_docstore_id 매핑
     index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), source_docs) for i in range(len(ids)) if ids[i] != -1}
-    # print(index_to_docstore_id)
     # VectorStore 생성
     vectorstore = FAISS(embedding_function=embedding_model, index=faiss_index, docstore=docstore, index_to_docstore_id=index_to_docstore_id)
     
     # 검색기 설정
     retriever = vectorstore.as_retriever(
         search_type="similarity_score_threshold",
-        search_kwargs={'k': 20, "score_threshold": 0.30}
+        search_kwargs={'k': 40, "score_threshold": 0.30}
     )
 
     bm25_retriever = BM25Retriever.from_documents(
@@ -158,18 +163,21 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
             seen_contents.add(content_hash)
 
     # 테이블 문서 추출
-    table_docs, retrieved_docs = extract_table_docs(retrieved_docs)
-    print(f"테이블 제거 문서 개수: {len(retrieved_docs)}")
+    table_docs, image_docs, retrieved_docs = extract_table_docs(retrieved_docs)
+    print(f"텍스트 문서 개수: {len(retrieved_docs)}")
     print(f"테이블 문서 개수: {len(table_docs)}")
+    print(f"이미지 문서 개수: {len(image_docs)}")
     reordering = LongContextReorder()
     reordered_docs = reordering.transform_documents(retrieved_docs)
-    return reordered_docs,table_docs
+    return reordered_docs,table_docs,image_docs
 
 
 # 메인 코드: 여러 교재를 처리
 def 운동_inference(query, book_names):
     table_docs = []
     retrieved_docs=[]
+    image_docs=[]
+    images=[]
     embedding_model = HuggingFaceEmbeddings(
         model_name='upskyy/bge-m3-korean',
         model_kwargs={'device': 'cuda'},
@@ -184,13 +192,11 @@ def 운동_inference(query, book_names):
         if book_name=='백년운동':
             query = convert_common_to_medical(query)
         
-        docs, tables = process_document_for_book(query, book_name, query_embedding, embedding_model)
+        docs, tables, images = process_document_for_book(query, book_name, query_embedding, embedding_model)
         # retrieved_docs와 table_docs에 각각 축적
         retrieved_docs += docs  # 새로운 문서들을 추가
-
-        if tables:
-            for table in tables:
-                table_docs.append(f'{os.getcwd()}\\data\\{book_name}\\{book_name}\\{table}.png')
+        table_docs +=tables
+        image_docs+=images
         
     print(f"Total unique documents retrieved: {len(retrieved_docs)}")
     
@@ -253,22 +259,10 @@ def 운동_inference(query, book_names):
             'context': retrieved_docs, 
             'question': query
             })
-        # print(f'Result for query: {result}')
-        # output.append(result)
+
         # 모델 출력에서 답변 부분만 추출
         answer = result['text'].strip()  # 필요시 'text'를 실제 반환 필드명으로 변경
-
         formatted_answer = format_text(answer)
-
-        # # table_docs가 리스트일 경우에 대한 처리
-        # if table_docs is not None:
-        #     # 리스트 내 각 항목에 대해 format_text 적용
-        #     table_docs = "\n".join([str(doc.page_content) for doc in table_docs])
-        #         # 리스트가 아닐 경우, 일반 문자열로 처리
-        #     table_docs = format_text(table_docs)
-        # else:
-        #     table_docs=''
-
         # 결과를 JSON 파일에 저장
         save_results({'query': query, 'answer': formatted_answer}, json_file_path)
         
@@ -276,24 +270,11 @@ def 운동_inference(query, book_names):
         print(f'Error during RAG chain execution for query: {e}')
         return None
     # 반환된 문서 리스트 반환
-    return formatted_answer[:1950], table_docs
+    return formatted_answer[:1900], table_docs, image_docs
 
 # book_names = {"백년운동"}
 # query = "동작별로 무릎에 부담이 가능정도를 정리해줘"
-# answer,table_docs=운동_inference(query, book_names)
-
-book_names = {"백년운동"}
-que=['반복 최대치(RM) 값과 관련하여 근력 운동의 중요성은 무엇입니까?','신체 활동을 측정하는 데 대사 당량(MET)의 중요성은 무엇입니까?','회전근 개는 스트레스 하에서 어깨 안정성을 어떻게 지원합니까?'
-    ]
-answer=[]
-for i in que:
-    # output,table_docs=운동_inference(query[i], book_names)
-    output,table_docs=운동_inference(i, book_names)
-    if output is None:
-        answer.append('None')
-    else:
-        answer.append(output)
-
-
-print(f"Final Answer: {answer}")
+# answer, table_docs, image_docs= 운동_inference(query, book_names)
+# print(f"Final Answer: {answer}")
 # print(f"Table Docs: {table_docs}")
+# print(f"Image Docs: {image_docs}")

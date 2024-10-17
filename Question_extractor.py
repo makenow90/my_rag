@@ -23,8 +23,6 @@ async def send_to_rabbitmq(message_content, message_priority, author_name, chann
         # 현재 채널 
         channel = await connection.channel()  # 채널 생성
 
-        # 질문과 작성자 이름, 채널 ID를 구분자(예: "뀳")로 묶어서 전송
-
         message_body = {"message_content": message_content,'author_info':author_name,'channel_id':channel_id}
         # 기본 큐를 in_queue로 선택하고 메시지를 전송
         await channel.default_exchange.publish(
@@ -37,9 +35,6 @@ async def send_to_rabbitmq(message_content, message_priority, author_name, chann
             ),
             routing_key='in_queue'  # in_queue로 전송
         )
-
-
-
 
         print(f"Sent '{message_content}' with priority {message_priority} and author '{author_name}' to in_queue")
 
@@ -110,6 +105,25 @@ async def consume_out_queue():
                                     await discord_channel.send(files=files_to_attach)
                                 else:
                                     await discord_channel.send(f"No valid table files found. - {author_info}")
+
+                        elif message_type == "image":
+                            # 테이블 데이터(파일 경로 리스트) 처리
+                            image_answers = message_data.get("image_answers")
+                            print(f"image answers: {image_answers}")
+                            if image_answers:
+                                files_to_attach = []
+                                for file_path in image_answers[:9]:
+                                    # 파일이 존재하는지 확인 후 Discord 파일 첨부 리스트에 추가
+                                    if os.path.exists(file_path):
+                                        files_to_attach.append(discord.File(file_path))
+                                    else:
+                                        print(f"File not found: {file_path}")
+                                        
+                                print(files_to_attach)
+                                if files_to_attach:
+                                    await discord_channel.send(files=files_to_attach)
+                                else:
+                                    await discord_channel.send(f"No valid image files found. - {author_info}")
 
                         elif message_type == "text":
                             # 일반 텍스트 메시지 처리
