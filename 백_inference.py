@@ -27,6 +27,9 @@ from langchain_teddynote.retrievers import (
     OktBM25Retriever,
 )
 from langchain_community.document_transformers import LongContextReorder
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 
 load_dotenv()
 # 프로젝트 이름을 입력합니다.
@@ -76,6 +79,8 @@ def extract_table_docs(documents):
     return table_docs,image_docs,text_docs
 
 def process_document_for_book(query, book_name, query_embedding, embedding_model):
+    sparse_docs = []
+    dense_docs = []
     """특정 교재의 인덱스와 피클 파일을 로드하고 문서를 검색."""
     # 현재 경로에서 교재의 피클 파일 및 인덱스 파일 경로 설정
     base_name = base64.urlsafe_b64encode(book_name.encode('utf-8')).decode('utf-8')
@@ -96,7 +101,7 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     # 문서 리스트 작성
     # InMemoryDocstore 생성
     docstore = InMemoryDocstore(dict(enumerate(documents)))
-
+    print(f'111111111111{len(docstore._dict)}')
     # FAISS 인덱스에서 검색 수행
     D, I = faiss_index.search(np.array([query_embedding]).astype(np.float32), faiss_index.ntotal)
     
@@ -106,7 +111,7 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     
     # index_to_docstore_id 매핑
     index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), source_docs) for i in range(len(ids)) if ids[i] != -1}
-    print(index_to_docstore_id)
+    # print(index_to_docstore_id)
     # VectorStore 생성
     vectorstore = FAISS(embedding_function=embedding_model, index=faiss_index, docstore=docstore, index_to_docstore_id=index_to_docstore_id)
     
@@ -115,30 +120,51 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
         search_type="similarity_score_threshold",
         search_kwargs={'k': 40, "score_threshold": 0.30}
     )
+    
 
-    # bm25 retriever와 faiss retriever를 초기화합니다.
-    bm25_retriever = BM25Retriever.from_documents(
-        documents
+    # 리랭커 dense 모델에 적용
+    # 모델 초기화
+    reranker_model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
+
+    # 상위 3개의 문서 선택
+    compressor = CrossEncoderReranker(model=reranker_model, top_n=20)
+
+    # 문서 압축 검색기 초기화
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=retriever
     )
-    bm25_retriever.k = 20  # BM25Retriever의 검색 결과 개수를 5로 설정합니다.
+    dense_docs = compression_retriever.invoke(query)
 
-    sparse_docs = bm25_retriever.get_relevant_documents(query)
-    # 질문과 관련된 문서 추출
-    dense_docs = retriever.get_relevant_documents(query)
-    
-    retrieved_docs=sparse_docs+dense_docs
-    
+    for i, doc in zip(ids, dense_docs):
+        print(f"dense 문서 ID: {i}, {doc.page_content[:30]}")  # 처음 100자만 출력
+
+    # 리랭커 sparse 모델에 적용
+    bm25_retriever = KiwiBM25Retriever.from_documents(
+    documents
+    )
+    bm25_retriever.k = 40  # BM25Retriever의 검색 결과 개수를 5로 설정합니다.
+
+    # 상위 3개의 문서 선택
+    compressor = CrossEncoderReranker(model=reranker_model, top_n=20)
+
+    # 문서 압축 검색기 초기화
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=bm25_retriever
+    )
+    sparse_docs = compression_retriever.invoke(query)
+
     # 검색된 문서 출력
     for i, doc in enumerate(sparse_docs):
         print(f"sparse 문서 {i + 1}: {doc.page_content[:30]}...")  # 문서의 처음 200자 출력
 
-    for i, doc in zip(ids, dense_docs):
-        print(f"dense 문서 ID: {i+1}, 내용 요약: {doc.page_content[:30]}")  # 처음 100자만 출력
-
     retrieved_docs=sparse_docs+dense_docs
-    print(f"검색된 문서 개수: {len(retrieved_docs)}")
-    print(len(retrieved_docs))
 
+    print(f"검색된 문서 개수: {len(retrieved_docs)}")
+    
+    table_docs, image_docs, retrieved_docs = extract_table_docs(retrieved_docs)
+    print(f"텍스트 문서 개수: {len(retrieved_docs)}")
+    print(f"테이블 문서 개수: {len(table_docs)}")
+    print(f"이미지 문서 개수: {len(image_docs)}")
     
     # 12. 중복 문서 제거
     seen_contents = set()
@@ -148,14 +174,11 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
         if content_hash not in seen_contents:
             filtered_docs.append(doc)
             seen_contents.add(content_hash)
+    print(f"(중복 제거된)텍스트 문서: {len(filtered_docs)}")
 
-    # 테이블 문서 추출 table_docs,image_docs,text_docs
-    table_docs, image_docs, retrieved_docs = extract_table_docs(retrieved_docs)
-    print(f"텍스트 문서 개수: {len(retrieved_docs)}")
-    print(f"테이블 문서 개수: {len(table_docs)}")
-    print(f"이미지 문서 개수: {len(image_docs)}")
+    # 테이블 문서 추출
     reordering = LongContextReorder()
-    reordered_docs = reordering.transform_documents(retrieved_docs)
+    reordered_docs = reordering.transform_documents(filtered_docs)
     return reordered_docs,table_docs,image_docs
 
 
@@ -182,10 +205,7 @@ def 백_inference(query, book_names):
         retrieved_docs += docs  # 새로운 문서들을 추가
         table_docs +=tables
         image_docs+=images
-        # if tables:
-        #     for table in tables:
-        #         table_docs.append(f'{os.getcwd()}\\data\\{book_name}\\{book_name}\\{table}.png')
-        
+
     print(f"Total unique documents retrieved: {len(retrieved_docs)}")
     # 13. Ollama 모델 설정
     # model = ChatOllama(model="llama3.1:70b", temperature=0.5)gemma2:27b
@@ -239,7 +259,7 @@ def 백_inference(query, book_names):
 
     # 16. 체인 실행
     print(f'Executing RAG chain for query: {query}')
-    print(table_docs)
+
     try:
         result = chain.invoke({
             'context': retrieved_docs, 
@@ -258,10 +278,10 @@ def 백_inference(query, book_names):
     # 반환된 문서 리스트 반환
     return formatted_answer[:1900], table_docs, image_docs
 
-
 # book_names = {"견고한데이터엔지니어링", "aws","데이터플랫폼설계구축"}
-# query = "데이터 웨어하우스 설계, 데이터 플랫폼 설계"
-# answer, table_docs, image_docs=백_inference(query, book_names)
-# print(f"Final Answer: {answer}")
-# print(f"Table Docs: {table_docs}")
-# print(f"Image Docs: {image_docs}")
+book_names = {"견고한데이터엔지니어링"}
+query = "sql 문제 하나 알려주고 해설해줘"
+answer, table_docs, image_docs=백_inference(query, book_names)
+print(f"Final Answer: {answer}")
+print(f"Table Docs: {table_docs}")
+print(f"Image Docs: {image_docs}")

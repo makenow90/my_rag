@@ -28,6 +28,9 @@ from langchain_teddynote.retrievers import (
 )
 from langchain_community.document_transformers import LongContextReorder
 
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 
 load_dotenv()
 # 프로젝트 이름을 입력합니다.
@@ -120,7 +123,6 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
     # 검색된 IDs를 1차원 배열로 변환
     ids = I.flatten()
     
-    
     # index_to_docstore_id 매핑
     index_to_docstore_id = {int(ids[i]): find_metadata_index(int(ids[i]), source_docs) for i in range(len(ids)) if ids[i] != -1}
     # VectorStore 생성
@@ -132,26 +134,49 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
         search_kwargs={'k': 40, "score_threshold": 0.30}
     )
 
-    bm25_retriever = BM25Retriever.from_documents(
+    # 리랭커 dense 모델에 적용
+    # 모델 초기화
+    reranker_model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
+
+    # 상위 3개의 문서 선택
+    compressor = CrossEncoderReranker(model=reranker_model, top_n=20)
+
+    # 문서 압축 검색기 초기화
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=retriever
+    )
+    dense_docs = compression_retriever.invoke(query)
+
+    for i, doc in zip(ids, dense_docs):
+        print(f"dense 문서 ID: {i}, {doc.page_content[:30]}")  # 처음 100자만 출력
+
+    # 리랭커 sparse 모델에 적용
+    bm25_retriever = KiwiBM25Retriever.from_documents(
     documents
     )
-    bm25_retriever.k = 20  # BM25Retriever의 검색 결과 개수를 5로 설정합니다.
+    bm25_retriever.k = 40  # BM25Retriever의 검색 결과 개수를 5로 설정합니다.
 
-    sparse_docs = bm25_retriever.get_relevant_documents(query)
-    # 질문과 관련된 문서 추출
-    dense_docs = retriever.get_relevant_documents(query)
-    
+    # 상위 3개의 문서 선택
+    compressor = CrossEncoderReranker(model=reranker_model, top_n=20)
+
+    # 문서 압축 검색기 초기화
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=bm25_retriever
+    )
+    sparse_docs = compression_retriever.invoke(query)
+
     # 검색된 문서 출력
     for i, doc in enumerate(sparse_docs):
         print(f"sparse 문서 {i + 1}: {doc.page_content[:30]}...")  # 문서의 처음 200자 출력
 
-    for i, doc in zip(ids, dense_docs):
-        print(f"dense 문서 ID: {i+1}, 내용 요약: {doc.page_content[:30]}")  # 처음 100자만 출력
-
     retrieved_docs=sparse_docs+dense_docs
-    print(f"검색된 문서 개수: {len(retrieved_docs)}")
-    print(len(retrieved_docs))
 
+    print(f"검색된 문서 개수: {len(retrieved_docs)}")
+    
+    table_docs, image_docs, retrieved_docs = extract_table_docs(retrieved_docs)
+    print(f"텍스트 문서 개수: {len(retrieved_docs)}")
+    print(f"테이블 문서 개수: {len(table_docs)}")
+    print(f"이미지 문서 개수: {len(image_docs)}")
     
     # 12. 중복 문서 제거
     seen_contents = set()
@@ -161,14 +186,11 @@ def process_document_for_book(query, book_name, query_embedding, embedding_model
         if content_hash not in seen_contents:
             filtered_docs.append(doc)
             seen_contents.add(content_hash)
-
+    print(f"(중복 제거된)텍스트 문서: {len(filtered_docs)}")
     # 테이블 문서 추출
-    table_docs, image_docs, retrieved_docs = extract_table_docs(retrieved_docs)
-    print(f"텍스트 문서 개수: {len(retrieved_docs)}")
-    print(f"테이블 문서 개수: {len(table_docs)}")
-    print(f"이미지 문서 개수: {len(image_docs)}")
+
     reordering = LongContextReorder()
-    reordered_docs = reordering.transform_documents(retrieved_docs)
+    reordered_docs = reordering.transform_documents(filtered_docs)
     return reordered_docs,table_docs,image_docs
 
 
@@ -272,9 +294,9 @@ def 운동_inference(query, book_names):
     # 반환된 문서 리스트 반환
     return formatted_answer[:1900], table_docs, image_docs
 
-# book_names = {"백년운동"}
-# query = "동작별로 무릎에 부담이 가능정도를 정리해줘"
-# answer, table_docs, image_docs= 운동_inference(query, book_names)
-# print(f"Final Answer: {answer}")
-# print(f"Table Docs: {table_docs}")
-# print(f"Image Docs: {image_docs}")
+book_names = {"백년운동"}
+query = "목디스크 상황에서 상체운동법"
+answer, table_docs, image_docs= 운동_inference(query, book_names)
+print(f"Final Answer: {answer}")
+print(f"Table Docs: {table_docs[:5]}")
+print(f"Image Docs: {image_docs[:5]}")

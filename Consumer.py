@@ -45,17 +45,14 @@ def process_message(channel, method, body):
 
     image_answers=[]
     if query.startswith('!백'):
-        # book_names =  {"견고한데이터엔지니어링", "aws", "데이터플랫폼설계구축"}
-        book_names =  {"데이터플랫폼설계구축"}
+        book_names =  {"aws", "데이터플랫폼설계구축","견고한데이터엔지니어링"}
+        # book_names =  {"견고한데이터엔지니어링"}
         query=query.replace('!백','')
         answer,table_answers,image_answers=백_inference(query, book_names)
     elif query.startswith('!운동'):
         book_names =  {"백년운동"}
         query=query.replace('!운동','')
         answer,table_answers,image_answers=운동_inference(query, book_names)
-        # table_answers=['c:\\Users\\makenow\\prj\\my_rag\\data\\백년운동\\백년운동\\60.png',
-        # 'c:\\Users\\makenow\\prj\\my_rag\\data\\백년운동\\백년운동\\60.png']
-        # answer='텍스트  '
     
     print(f"sent query: {query}")
 

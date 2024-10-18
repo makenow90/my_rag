@@ -38,32 +38,6 @@ async def send_to_rabbitmq(message_content, message_priority, author_name, chann
 
         print(f"Sent '{message_content}' with priority {message_priority} and author '{author_name}' to in_queue")
 
-# RabbitMQ에서 out_queue로부터 비동기적으로 답변을 수신하는 함수
-# async def consume_out_queue():
-#     connection = await aio_pika.connect_robust("amqp://localhost/")
-#     async with connection:
-#         channel = await connection.channel()
-#         queue = await channel.declare_queue('out_queue', durable=True)
-
-#         # RabbitMQ 큐에서 메시지를 비동기적으로 순회할 수 있는 이터레이터를 생성합니다. 이 이터레이터를 사용해 큐에 쌓여 있는 메시지를 하나씩 처리
-#         async with queue.iterator() as queue_iter:
-#             # queue_iter를 사용해 큐에서 하나씩 메시지를 가져오는 비동기 루프
-#             async for message in queue_iter:
-#                 # 메세지가 처리 되고 있다는걸 RabbitMQ에 알리고, 완료되면 **ACK(acknowledgment)**를
-#                 # RabbitMQ에 전송해 메시지가 성공적으로 처리되었음을 알림
-#                 async with message.process():
-#                     # 수신한 메시지 파싱 (질문, 작성자 이름, 채널 ID가 구분자로 묶여 있음)
-#                     message_body = message.body.decode()
-#                     response, author_name, channel_id = message_body.split("뀳")
-                    
-#                     print(f"Received response from out_queue: {response} for {author_name} in channel {channel_id}")
-#                     # Discord에서 채널 ID를 이용해 채널을 찾음
-#                     discord_channel = client.get_channel(int(channel_id))
-#                     if discord_channel:
-#                         # 해당 채널로 작성자에게 응답 전송
-#                         await discord_channel.send(response)
-#                     else:
-#                         print(f"Channel ID {channel_id} not found")
 async def consume_out_queue():
     connection = await aio_pika.connect_robust("amqp://localhost/")
     async with connection:
@@ -200,26 +174,21 @@ async def on_message(message):
             #     await message.reply(f'2기의 네임드 능력자. 맥북을 너무 자랑하는 자랑쟁이. 좋아하는 야구팀은 LG, 그러나 잠실의 주인은 두산이다.')
             else:
                 await message.reply(f'정보를 업데이트 중입니다.')
-    #     # 작성자가 'igeolwaehani'이면 모든 이모지를 추가
-    # if message.author.name == 'igeolwaehani':
-    #     # 기본 이모지 리스트 (원하는 대로 수정 가능)
-    #     all_emojis = ['👍', '😂', '🎉', '😎', '🔥', '❤️', '🙌', '👏', '😍', '🎈']
+        # 작성자가 'igeolwaehani'이면 모든 이모지를 추가
         
-    #     # # 서버 커스텀 이모지 가져오기
-    #     # custom_emojis = [str(emoji) for emoji in client.emojis]
+    if message.author.name == 'igeolwaehani':
+        # 기본 이모지 리스트 (원하는 대로 수정 가능)
+        all_emojis = ['👍', '😂', '🎉', '😎', '🔥', '❤️', '🙌', '👏', '😍', '🎈']
 
-    #     # 모든 이모지(기본 + 커스텀) 리스트
-    #     # all_emojis = basic_emojis + custom_emojis
+        # 모든 이모지를 메시지에 리액션으로 추가
+        for emoji in all_emojis:
+            try:
+                await message.add_reaction(emoji)
+            except discord.HTTPException:
+                print(f"이모지 {emoji} 추가 실패")
 
-    #     # 모든 이모지를 메시지에 리액션으로 추가
-    #     for emoji in all_emojis:
-    #         try:
-    #             await message.add_reaction(emoji)
-    #         except discord.HTTPException:
-    #             print(f"이모지 {emoji} 추가 실패")
-
-    #     # '넘 멋있으세요!'라는 댓글 남기기
-    #     await message.reply('넘 멋있으세요!')
+        # '넘 멋있으세요!'라는 댓글 남기기
+        # await message.reply('넘 멋있으세요!')
 
 # 디스코드 봇 실행 (토큰을 디스코드 개발자 포털에서 발급받아야 함)
 client.run(dis_token)
