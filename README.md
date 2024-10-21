@@ -7,15 +7,13 @@
 
     # 백엔드 관련 질문 '백_inference.py' 의 '백_inference'함수 불러옴
     if query.startswith('!백'):
-        book_names =  {"견고한데이터엔지니어링", "데이터플랫폼설계구축"}
+        book_names =  {"aws", "데이터플랫폼설계구축","견고한데이터엔지니어링"}
         query=query.replace('!백','')
-        answer=백_inference(query, book_names)
-
-    # 운동 관련 질문 '운동_inference.py' 의 '운동_inference'함수 불러옴
+        answer,table_answers,image_answers=백_inference(query, book_names)
     elif query.startswith('!운동'):
         book_names =  {"백년운동"}
         query=query.replace('!운동','')
-        answer=운동_inference(query, book_names)
+        answer,table_answers,image_answers=운동_inference(query, book_names)
 ```
 3. 데이터나 백엔트 관련된 질문은 해당 추론 실행 (백_inference.py)
 4. 운동에 관한 질문은 해당 추론 실행 (운동_inference.py)
